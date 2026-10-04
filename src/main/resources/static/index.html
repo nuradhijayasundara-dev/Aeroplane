@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkyBook - Flight Booking</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f1f5f9; color: #1e293b; }
+  header { background: #1d4ed8; color: #fff; padding: 18px 24px; font-size: 22px; font-weight: 600; }
+  main { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+  section { background: #fff; border-radius: 10px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  h2 { margin-top: 0; font-size: 18px; }
+  input { padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; }
+  button { padding: 8px 14px; border: 0; border-radius: 6px; background: #1d4ed8; color: #fff; cursor: pointer; font-size: 14px; }
+  button.danger { background: #dc2626; }
+  button:hover { opacity: .9; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #e2e8f0; }
+  #msg { padding: 10px; border-radius: 6px; margin-bottom: 16px; display: none; }
+  #msg.ok { background: #dcfce7; color: #166534; display: block; }
+  #msg.err { background: #fee2e2; color: #991b1b; display: block; }
+  dialog { border: 0; border-radius: 10px; padding: 20px; width: 340px; }
+  dialog input { width: 100%; margin-bottom: 10px; }
+  .cancelled { color: #94a3b8; text-decoration: line-through; }
+</style>
+</head>
+<body>
+<header>✈ SkyBook</header>
+<main>
+  <div id="msg"></div>
+
+  <section>
+    <h2>Search flights</h2>
+    <div class="row">
+      <input id="from" placeholder="From (e.g. London)">
+      <input id="to" placeholder="To (e.g. Paris)">
+      <button onclick="searchFlights()">Search</button>
+    </div>
+    <table>
+      <thead><tr><th>Flight</th><th>Route</th><th>Departure</th><th>Price</th><th>Seats</th><th></th></tr></thead>
+      <tbody id="flights"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>My bookings</h2>
+    <div class="row">
+      <input id="lookupEmail" type="email" placeholder="Your email">
+      <button onclick="loadBookings()">Show bookings</button>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>Flight</th><th>Passenger</th><th>Seats</th><th>Total</th><th>Status</th><th></th></tr></thead>
+      <tbody id="bookings"></tbody>
+    </table>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <h3 id="dlgTitle" style="margin-top:0"></h3>
+  <input id="name" placeholder="Passenger name">
+  <input id="email" type="email" placeholder="Email">
+  <input id="seats" type="number" min="1" max="9" value="1">
+  <div class="row" style="margin:0">
+    <button onclick="confirmBooking()">Confirm booking</button>
+    <button class="danger" onclick="dlg.close()">Close</button>
+  </div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const dlg = $('dlg');
+let selectedFlight = null;
+
+function show(text, ok = true) {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = ok ? 'ok' : 'err';
+  setTimeout(() => m.className = '', 5000);
+}
+
+async function api(url, options) {
+  const res = await fetch(url, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || body.error || 'Request failed');
+  return body;
+}
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function searchFlights() {
+  const q = new URLSearchParams({ from: $('from').value, to: $('to').value });
+  const list = await api('/api/flights?' + q);
+  $('flights').innerHTML = list.map(f => `
+    <tr>
+      <td>${esc(f.flightNumber)}</td>
+      <td>${esc(f.origin)} → ${esc(f.destination)}</td>
+      <td>${new Date(f.departure).toLocaleString()}</td>
+      <td>$${f.price.toFixed(2)}</td>
+      <td>${f.availableSeats}</td>
+      <td><button ${f.availableSeats ? '' : 'disabled'}
+          onclick='openBooking(${f.id}, ${JSON.stringify(f.flightNumber)})'>Book</button></td>
+    </tr>`).join('') || '<tr><td colspan="6">No flights found</td></tr>';
+}
+
+function openBooking(id, number) {
+  selectedFlight = id;
+  $('dlgTitle').textContent = 'Book flight ' + number;
+  dlg.showModal();
+}
+
+async function confirmBooking() {
+  try {
+    const b = await api('/api/bookings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        flightId: selectedFlight,
+        passengerName: $('name').value,
+        email: $('email').value,
+        seats: Number($('seats').value)
+      })
+    });
+    dlg.close();
+    show(`Booking #${b.id} confirmed! Total $${b.totalPrice.toFixed(2)}`);
+    $('lookupEmail').value = b.email;
+    searchFlights();
+    loadBookings();
+  } catch (e) {
+    show(e.message === 'Request failed' ? 'Please check the form fields' : e.message, false);
+  }
+}
+
+async function loadBookings() {
+  const email = $('lookupEmail').value;
+  if (!email) return show('Enter your email first', false);
+  const list = await api('/api/bookings?email=' + encodeURIComponent(email));
+  $('bookings').innerHTML = list.map(b => `
+    <tr class="${b.status === 'CANCELLED' ? 'cancelled' : ''}">
+      <td>${b.id}</td>
+      <td>${esc(b.flight.flightNumber)} ${esc(b.flight.origin)} → ${esc(b.flight.destination)}</td>
+      <td>${esc(b.passengerName)}</td>
+      <td>${b.seats}</td>
+      <td>$${b.totalPrice.toFixed(2)}</td>
+      <td>${b.status}</td>
+      <td>${b.status === 'CONFIRMED' ? `<button class="danger" onclick="cancelBooking(${b.id})">Cancel</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="7">No bookings</td></tr>';
+}
+
+async function cancelBooking(id) {
+  try {
+    await api('/api/bookings/' + id, { method: 'DELETE' });
+    show('Booking cancelled');
+    searchFlights();
+    loadBookings();
+  } catch (e) { show(e.message, false); }
+}
+
+searchFlights();
+</script>
+</body>
+</html>
